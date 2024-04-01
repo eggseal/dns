@@ -1,0 +1,14 @@
+# Ignore files inside the root folder with no extension (compiled files)
+*
+!*/
+*.*
+!*.**
+
+# Ignore VSCode workspace config directory
+.vscode
+
+# Ignore PDF files
+*.pdf
+
+# Ignore extra files
+src/dnstest.c
