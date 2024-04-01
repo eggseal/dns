@@ -149,14 +149,12 @@ unsigned char* read_name(unsigned char* reader,unsigned char* buffer,int* count)
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        printf("[WRN] A logging path was not entered. Logging is disabled");
+        printf("[WRN] A logging path was not entered. Logging is disabled\n");
         logging = 0;
     } else {
         log_path = argv[1];
     }
-
     FILE* file;
-    char log[58];
 
     while (1) {
         // Get the variables from user input
@@ -165,7 +163,7 @@ int main(int argc, char** argv) {
         scanclient(cmd, &ip, &type, &domain);
 
         if (empty(ip) || empty(type) || empty(domain)) {
-            printf("[ERROR] Invalid command\n");
+            printf("[ERR] Invalid command\n");
             continue;
         }
 
@@ -174,6 +172,10 @@ int main(int argc, char** argv) {
         unsigned int size = 0;
 
         int sockFD = socket(AF_INET, SOCK_DGRAM, PROTOCOL);
+        if (sockFD < 0) { 
+            printf("[ERR] Failed to create the socket\n"); 
+            continue;
+        }
 
         struct sockaddr_in server;
         server.sin_family = AF_INET;
@@ -285,13 +287,15 @@ int main(int argc, char** argv) {
             printf("[   ] %-*s", ans_meta, answer[i].name);
             printf("   %-5s", get_type(ntohs(answer[i].resource->type)));
 
+            char* res;
             if (ntohs(answer[i].resource->type) == resolve_type("A")) {
                 long* ip = (long*) answer[i].rdata;
                 server.sin_addr.s_addr = *ip;
-                printf("   %s", inet_ntoa(server.sin_addr));
+                res = inet_ntoa(server.sin_addr);
             } else if (ntohs(answer[i].resource->type) == resolve_type("CNAME")) {
-                printf("   %s", answer[i].rdata);
+                res = answer[i].rdata;
             }
+            printf("   %s", res);
             printf("\n");
 
             if (logging == 0) continue;
@@ -300,11 +304,10 @@ int main(int argc, char** argv) {
 
             file = fopen(log_path, "a");
 
-            memset(log, '\0', sizeof(log));
             char the_time[20];
             strftime(the_time, sizeof(the_time), "%Y-%m-%d %H:%M:%02S", local);
 
-            fprintf(file, "%-20s %-6s %-15s\n", the_time, type, ip);
+            fprintf(file, "%s %s %s %s %s\n", the_time, ip, get_type(ntohs(answer[i].resource->type)), answer[i].name, res);
             fclose(file);
         }
 
