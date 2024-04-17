@@ -6,48 +6,12 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <time.h>
-
-// Structures
-typedef struct Header {
-    unsigned short id;
-    short int flags; // RD(1) TC(1) AA(1) OP_CODE(4) QR(1) R_CODE(4) CD(1) AD(1) Z(1) RA(1)
-
-    unsigned short qcount;  
-    unsigned short anscount;
-    unsigned short authcount;
-    unsigned short addcount;
-} Header;
-
-typedef struct Question {
-    unsigned short type;
-    unsigned short class;
-} Question;
-
-#pragma pack(push, 1)
-typedef struct ResData {
-    unsigned short type;
-    unsigned short class;
-    unsigned int ttl;
-    unsigned short len;
-} ResData;
-#pragma pack(pop)
-
-typedef struct ResRecord {
-    unsigned char* name;
-    ResData* resource;
-    unsigned char* rdata;
-} ResRecord;
-
-typedef struct Query {
-    unsigned char* name;
-    Question* ques;
-} Query;
+#include "common.h"
 
 // Constants
 #define MAX_CMD 298
 #define MAX_DOMAIN 256
 #define PORT 53
-#define PROTOCOL 0
 #define BUFFER_SIZE 0xFFFF
 
 // Variables
@@ -57,26 +21,6 @@ char *ip, *type, *domain;
 unsigned char logging = 1;
 
 // Subroutines
-#define streq(var, str) (strcmp(var, str) == 0)
-
-#define empty(str) (strlen(str) == 0)
-
-unsigned short resolve_type(char* type) {
-    if (streq(type, "SOA")) return 6;
-    if (streq(type, "A")) return 1;
-    if (streq(type, "NS")) return 2;
-    if (streq(type, "MX")) return 15;
-    if (streq(type, "CNAME")) return 5;
-}
-
-unsigned char* get_type(unsigned short type) {
-    if (type == 6) return "SOA";
-    if (type == 1) return "A";
-    if (type == 2) return "NS";
-    if (type == 15) return "MX";
-    if (type == 5) return "CNAME";
-}
-
 void scanclient(char* cmd, char** ip, char** type, char** domain) {
     char* token;
     char* prev;
@@ -94,57 +38,6 @@ void scanclient(char* cmd, char** ip, char** type, char** domain) {
     (*ip)[strcspn(*ip, "\n")] = '\0';
     (*type)[strcspn(*type, "\n")] = '\0';
     (*domain)[strcspn(*domain, "\n")] = '\0'; 
-}
-
-void format_dns_name(char* query, char* domain) {
-    int lock = 0;
-    strcat(domain, ".");
-    for (int i = 0; i < strlen(domain); i++) {
-        if (domain[i] != '.') continue;
-
-        *query++ = i - lock; // Write the length
-        for (; lock < i; lock++) 
-            *query++ = domain[lock]; // Write the domain until before the next '.'
-        lock++;
-    }
-    *query++ = '\0';
-}
-
-unsigned char* read_name(unsigned char* reader,unsigned char* buffer,int* count) {
-    unsigned char *name;
-    unsigned int p = 0,jumped = 0;
- 
-    *count = 1;
-    name = (unsigned char*)malloc(0x100);
-    name[0]='\0';
- 
-    while(*reader != 0) {
-        if(*reader >= 0xC0) {
-            unsigned int offset = (*reader) * 0x100 + *(reader + 1) - 0xC000;
-            reader = buffer + offset - 1;
-            jumped = 1;
-        } else {
-            name[p++] = *reader;
-        }
- 
-        reader++;
-        if(jumped == 0) (*count)++;
-    }
- 
-    name[p] = '\0';
-    if(jumped == 1) (*count)++;
- 
-    int name_len = strlen(name);
-    for(int i = 0; i < name_len; i++) {
-        p = name[i];
-        for(int j = 0; j < p; j++) {
-            name[i] = name[i + 1];
-            i++;
-        }
-        name[i] = '.';
-    }
-    name[name_len - 1] = '\0'; //remove the last dot
-    return name;
 }
 
 int main(int argc, char** argv) {
@@ -185,7 +78,7 @@ int main(int argc, char** argv) {
         printf("[REQ] Resolving request... ");
         Header *header = (Header*) &buffer;
         header->id = htons(getpid());
-        header->flags = 0b1000000000000000;
+        header->flags = htons(0x0100); // RD
         header->qcount = htons(1); // 1 question
         header->anscount = 0;
         header->authcount = 0;
@@ -198,9 +91,14 @@ int main(int argc, char** argv) {
 
         Question* info = (Question*) &buffer[size];
         info->type = htons(resolve_type(type));
-        info->class = htons(1);
+        info->_class = htons(1);
         size += sizeof(Question);
         printf("Done.\n");
+
+        for (int i = 0; i < 32; i++) {
+            printf("%02X ", buffer[i]);
+        }
+        printf("\n");
 
         printf("[REQ] Sending packet... ");
         int sent_size = sendto(sockFD, (char*) buffer, size, 0, (struct sockaddr*) &server, sizeof(server));
@@ -221,8 +119,9 @@ int main(int argc, char** argv) {
         unsigned int ans_meta = 0, aut_meta = 0, add_meta = 0;
 
         int stop = 0;
+        int _ = 0;
         for (int i = 0; i < ntohs(header->anscount); i++) {
-            answer[i].name = read_name(reader, buffer, &stop);
+            answer[i].name = read_name(reader, buffer, &stop, &_);
             strcat(answer[i].name, ".");
             reader += stop;
 
@@ -240,13 +139,13 @@ int main(int argc, char** argv) {
                 answer[i].rdata[ntohs(answer[i].resource->len)] = '\0';
                 reader += ntohs(answer[i].resource->len);
             } else {
-                answer[i].rdata = read_name(reader, buffer, &stop);
+                answer[i].rdata = read_name(reader, buffer, &stop, &_);
                 reader += stop;
             }
         }
 
         for (int i = 0; i < ntohs(header->authcount); i++) {
-            authority[i].name = read_name(reader, buffer, &stop);
+            authority[i].name = read_name(reader, buffer, &stop, &_);
             reader += stop;
 
             if ((int) strlen(authority[i].name) > aut_meta) 
@@ -255,12 +154,12 @@ int main(int argc, char** argv) {
             authority[i].resource = (ResData*) reader;
             reader += sizeof(ResData);
     
-            authority[i].rdata=read_name(reader, buffer, &stop);
+            authority[i].rdata=read_name(reader, buffer, &stop, &_);
             reader += stop;
         }
 
         for (int i = 0; i < ntohs(header->addcount); i++) {
-            additional[i].name = read_name(reader, buffer, &stop);
+            additional[i].name = read_name(reader, buffer, &stop, &_);
             reader += stop;
 
             if ((int) strlen(additional[i].name) > add_meta) 
@@ -277,7 +176,7 @@ int main(int argc, char** argv) {
                 additional[i].rdata[ntohs(additional[i].resource->len)]='\0';
                 reader+=ntohs(additional[i].resource->len);
             } else {
-                additional[i].rdata=read_name(reader, buffer, &stop);
+                additional[i].rdata=read_name(reader, buffer, &stop, &_);
                 reader+=stop;
             }
         }
@@ -334,6 +233,7 @@ int main(int argc, char** argv) {
             }
             printf("\n");
         }
+        for (int i = 0; i < sizeof(buffer); i++) buffer[i] = '\0';
     }
     return 0;
 }
