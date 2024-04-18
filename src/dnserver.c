@@ -8,7 +8,7 @@
 #include "common.h"
 
 int main(int argc, char** argv) {
-    if (argc <= 3) return 1;
+    if (argc < 3) return 1;
     char *ip, *port;
     FILE *zones, *log;
     short logging = 1;
@@ -16,7 +16,8 @@ int main(int argc, char** argv) {
     ip = argv[1];
     port = argv[2];
     zones = fopen(argv[3], "r");
-    if (argc > 4) log = fopen(argv[4], "rw");
+    printf("%d\n", argc);
+    if (argc > 4);
     else logging = 0;
 
     int sockFD = socket(AF_INET, SOCK_DGRAM, PROTOCOL);
@@ -127,7 +128,6 @@ int main(int argc, char** argv) {
         if (sent_size < 0) printf("Failed.\n");
         else printf("Done (%d bytes).\n", sent_size);
 
-        fseek(zones, 0, SEEK_SET);
-        free(ip);
+        for (int i = 0; i < sizeof(buffer); i++) buffer[i] = '\0';
     }
 }
