@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <net/if.h>
 #include <time.h>
 #include "common.h"
 
@@ -13,6 +14,7 @@
 #define MAX_DOMAIN 256
 #define PORT 53
 #define BUFFER_SIZE 0xFFFF
+enum Command { Server, Flush };
 
 // Variables
 char* log_path;
@@ -21,12 +23,13 @@ char *ip, *type, *domain;
 unsigned char logging = 1;
 
 // Subroutines
-void scanclient(char* cmd, char** ip, char** type, char** domain) {
+enum Command scanclient(char* cmd, char** ip, char** type, char** domain) {
     char* token;
     char* prev;
     *ip = NULL, *type = NULL, *domain = NULL;
 
-    token = strtok(cmd, " ");
+    token = strtok(cmd, " \n");
+    if (streq(token, "FLUSH")) return Flush;
     while (token != NULL) {
         prev = token;
         token = strtok(NULL, " ");
@@ -38,6 +41,8 @@ void scanclient(char* cmd, char** ip, char** type, char** domain) {
     (*ip)[strcspn(*ip, "\n")] = '\0';
     (*type)[strcspn(*type, "\n")] = '\0';
     (*domain)[strcspn(*domain, "\n")] = '\0'; 
+
+    return Server;
 }
 
 int main(int argc, char** argv) {
@@ -48,12 +53,38 @@ int main(int argc, char** argv) {
         log_path = argv[1];
     }
     FILE* file;
+    Cache cache;
 
     while (1) {
         // Get the variables from user input
         printf(">> ");
         fgets(cmd, sizeof cmd, stdin);
-        scanclient(cmd, &ip, &type, &domain);
+        enum Command c = scanclient(cmd, &ip, &type, &domain);
+
+        if (c == Flush) {
+            cache.index = 0;
+            for (int i = 0; i < 10; i++) {
+                strcpy(cache.entries[i].query, "\0");}
+            continue;
+        }
+
+        char q[0x1000];
+        strcat(q, "SERVER ");
+        strcat(q, ip);
+        strcat(q, " TYPE ");
+        strcat(q, type);
+        strcat(q, " DOMAIN ");
+        strcat(q, domain);
+        strcat(q, ".");
+
+        char* cached = check_cache(&cache, q);
+        if (!streq(cached, "\0")) {
+            printf("[ANS] %-*s.   %-5s   %-20s\n", (int) strlen(domain), "Name", "Type", "Response");
+            printf("[   ] %-*s.   %-5s   %-20s\n", (int) strlen(domain), domain, type, cached);
+            memset(q, '\0', sizeof(q));
+            continue;
+        }
+        memset(q, '\0', sizeof(q));
 
         if (empty(ip) || empty(type) || empty(domain)) {
             printf("[ERR] Invalid command\n");
@@ -79,7 +110,7 @@ int main(int argc, char** argv) {
         Header *header = (Header*) &buffer;
         header->id = htons(getpid());
         header->flags = htons(0x0100); // RD
-        header->qcount = htons(1); // 1 question
+        header->qcount = htons(1);
         header->anscount = 0;
         header->authcount = 0;
         header->addcount = 0;
@@ -95,9 +126,8 @@ int main(int argc, char** argv) {
         size += sizeof(Question);
         printf("Done.\n");
 
-        for (int i = 0; i < 32; i++) {
-            printf("%02X ", buffer[i]);
-        }
+        printf("[REQ] ");
+        for (int i = 0; i < 32; i++) printf("%02X ", buffer[i]);
         printf("\n");
 
         printf("[REQ] Sending packet... ");
@@ -181,6 +211,12 @@ int main(int argc, char** argv) {
             }
         }
 
+        time_t current = time(NULL);
+        struct tm* local = localtime(&current);
+
+        char the_time[20];
+        strftime(the_time, sizeof(the_time), "%Y-%m-%d %H:%M:%02S", local);
+
         if (ntohs(header->anscount) > 0) printf("\n[ANS] %-*s   %-5s   %-20s\n", ans_meta, "Name", "Type", "Response");
         for (int i = 0; i < ntohs(header->anscount); i++) {
             printf("[   ] %-*s", ans_meta, answer[i].name);
@@ -198,15 +234,23 @@ int main(int argc, char** argv) {
             printf("\n");
 
             if (logging == 0) continue;
-            time_t current = time(NULL);
-            struct tm* local = localtime(&current);
+
+            char query[0x1000];
+            strcat(query, "SERVER ");
+            strcat(query, ip);
+            strcat(query, " TYPE ");
+            strcat(query, get_type(ntohs(answer[i].resource->type)));
+            strcat(query, " DOMAIN ");
+            strcat(query, answer[i].name);
+
+            printf("\n");
+            if (streq(check_cache(&cache, query), "\0")) {
+                add_cache(&cache, query, res);
+            }
 
             file = fopen(log_path, "a");
-
-            char the_time[20];
-            strftime(the_time, sizeof(the_time), "%Y-%m-%d %H:%M:%02S", local);
-
-            fprintf(file, "%s %s %s %s %s\n", the_time, ip, get_type(ntohs(answer[i].resource->type)), answer[i].name, res);
+            fprintf(file, "%s %s %s\n", the_time, query, res);
+            memset(&query, '\0', 0x1000);
             fclose(file);
         }
 

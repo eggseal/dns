@@ -30,6 +30,16 @@ typedef struct ResRecord {
     unsigned char* rdata;
 } ResRecord;
 
+typedef struct QueryRes {
+    char query[298];
+    char response[0xFF];
+} QueryRes;
+
+typedef struct Cache {
+    unsigned int index;
+    QueryRes entries[10];
+} Cache;
+
 #define PROTOCOL 0
 
 #define streq(var, str) (strcmp(var, str) == 0)
@@ -110,4 +120,22 @@ unsigned char* read_name(unsigned char* reader,unsigned char* buffer,int* count,
     }
     name[name_len - 1] = '\0'; //remove the last dot
     return name;
+}
+
+char* check_cache(Cache* cache, char* query) {
+    for (int i = 0; i < 10; i++) {
+        if (streq(query, cache->entries[i].query)) 
+            return cache->entries[i].response;
+    }
+    printf("[CCH] %s not found\n", query);
+    return "\0";
+}
+
+void add_cache(Cache* cache, char* query, char* res) {
+    cache->index++;
+    if (cache->index >= 10) cache->index = 0;
+
+    printf("[CCH] Cached %s %s\n", query, res);
+    strcpy(cache->entries[cache->index].query, query);
+    strcpy(cache->entries[cache->index].response, res);
 }
